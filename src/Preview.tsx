@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { useEffect, useRef, useState } from 'react'
 import { paintPanel, panelRatio } from './art.ts'
-import { sections, variantFor, visibleSections, clamp, type Configuration, type PanelId, type VariantId } from './catalog.ts'
+import { sections, variantFor, visibleSections, clamp, isDoubleSided, isHalfWall, newConfiguration, type Configuration, type PanelId, type VariantId } from './catalog.ts'
 
 type Rect = [number, number, number, number]
 const fabricRects: Record<VariantId, Rect[]> = {
@@ -26,6 +26,8 @@ const axes = [
   new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0),
   new THREE.Vector3(0, 0, -1), new THREE.Vector3(-1, 0, 0),
 ]
+// Roof and valance proportions do not depend on wall options.
+const roofOnly = newConfiguration()
 const right = (side: number) => new THREE.Vector3(axes[side].z, 0, -axes[side].x)
 const tile = 512
 const atlasSize = tile * 4
@@ -39,7 +41,7 @@ function mapUV(index: number, x: number, y: number, ratio: number) {
   ]
 }
 
-function remapFabric(geometry: THREE.BufferGeometry, variant: VariantId, walls: string) {
+function remapFabric(geometry: THREE.BufferGeometry, variant: VariantId) {
   const uv = geometry.getAttribute('uv')
   const position = geometry.getAttribute('position')
   const groups: number[][] = Array.from({ length: 8 }, () => [])
@@ -71,7 +73,7 @@ function remapFabric(geometry: THREE.BufferGeometry, variant: VariantId, walls: 
     if (index < 4) roofBounds.push(new THREE.Vector4(minX, maxX, minY, maxY))
     for (const i of vertices) {
       output.set(mapUV(index, (coordinate(i) - minX) / (maxX - minX),
-        (maxY - position.getY(i)) / (maxY - minY), panelRatio(sections[index], walls)), i * 2)
+        (maxY - position.getY(i)) / (maxY - minY), panelRatio(sections[index], roofOnly)), i * 2)
     }
   }
   geometry.setAttribute('uv1', new THREE.BufferAttribute(output, 2))
@@ -117,7 +119,7 @@ function projectRoof(material: THREE.MeshStandardMaterial, roofBounds: THREE.Vec
             ), 0.0, 1.0);
             printUv = vec2(
               panelIndex * ${tile}.0 + ${margin}.0 + panelUv.x * ${tileWidth}.0,
-              ${margin}.0 + panelUv.y * ${tileWidth}.0 * ${panelRatio(sections[0], 'none')}
+              ${margin}.0 + panelUv.y * ${tileWidth}.0 * ${panelRatio(sections[0], roofOnly)}
             ) / ${atlasSize}.0;
           }
           diffuseColor *= texture2D(map, printUv);
@@ -286,7 +288,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
 
     function refreshOptions() {
       const design = latest.current.config
-      const key = [design.frame, design.walls, design.doubleSided].join('|')
+      const key = [design.frame, design.walls, design.wallPrint, design.halfWalls].join('|')
       if (key === wallKey || !gltf) return
       wallKey = key
       for (const object of frameObjects) object.visible = design.frame !== 'canopy-only'
@@ -301,23 +303,24 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
       const fullHeight = Math.max(.45, eave - .15)
       for (const section of visibleSections(design).filter(item => item.kind === 'wall')) {
         const index = sections.indexOf(section)
-        const height = design.walls === 'half' ? fullHeight * .52 : fullHeight
+        const half = isHalfWall(design, section.id)
+        const height = half ? fullHeight * .52 : fullHeight
         const geometry = new THREE.PlaneGeometry(span * .96, height, 1, 1)
         const uv = geometry.getAttribute('uv')
         const points = new Float32Array(uv.count * 2)
         for (let i = 0; i < uv.count; i++) {
-          points.set(mapUV(index, uv.getX(i), 1 - uv.getY(i), panelRatio(section, design.walls)), i * 2)
+          points.set(mapUV(index, uv.getX(i), 1 - uv.getY(i), panelRatio(section, design)), i * 2)
         }
         geometry.setAttribute('uv1', new THREE.BufferAttribute(points, 2))
         const plane = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map: texture, roughness: .89, side: THREE.FrontSide }))
         const outward = axes[section.side]
         plane.position.copy(outward).multiplyScalar(span * .465)
-        plane.position.y = design.walls === 'half' ? Math.min(eave - height / 2, height / 2 + .28) : eave - height / 2
+        plane.position.y = half ? Math.min(eave - height / 2, height / 2 + .28) : eave - height / 2
         plane.rotation.y = Math.atan2(outward.x, outward.z)
         plane.userData.panelId = section.id
         wallParts.push(plane)
         wallGroup.add(plane)
-        const lining = new THREE.Mesh(geometry.clone(), design.doubleSided
+        const lining = new THREE.Mesh(geometry.clone(), isDoubleSided(design, section.id)
           ? plane.material.clone()
           : new THREE.MeshStandardMaterial({ color: '#e9e1d2', roughness: .94 }))
         lining.position.copy(plane.position).addScaledVector(outward, -.002)
@@ -350,7 +353,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
         ctx.translate(index % 4 * tile + margin, Math.floor(index / 4) * tile + margin)
         ctx.fillStyle = panel.color
         ctx.fillRect(-margin, -margin, tile, tile)
-        paintPanel(ctx, panel, section, tileWidth, tileWidth * panelRatio(section, design.walls), { clip: false })
+        paintPanel(ctx, panel, section, tileWidth, tileWidth * panelRatio(section, design))
         ctx.restore()
         changed = true
       }
@@ -384,7 +387,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
           }
         }
         if (!Number.isFinite(eave)) eave = fabricBounds.min.y + span * .13
-        const roofBounds = remapFabric(exterior.geometry, variant, latest.current.config.walls)
+        const roofBounds = remapFabric(exterior.geometry, variant)
         const fabric = exterior.material as THREE.MeshStandardMaterial
         fabric.map?.dispose()
         fabric.map = texture

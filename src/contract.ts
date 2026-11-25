@@ -1,4 +1,4 @@
-import { fonts, frames, sections, variants, walls, type Configuration, type Layer } from './catalog.ts'
+import { fonts, frames, halfWalls, prints, sections, variants, walls, type Configuration, type Layer } from './catalog.ts'
 
 const idPattern = /^[a-z0-9-]{1,80}$/i
 const colorPattern = /^#[0-9a-f]{6}$/i
@@ -21,12 +21,24 @@ function isLayer(layer: unknown): layer is Layer {
     typeof layer.name === 'string' && layer.name.length <= 160 && inRange(layer.ratio, 0.05, 20)
 }
 
-export function parseConfiguration(value: unknown): Configuration {
-  if (!isObject(value) || value.version !== 1 || value.productId !== 'canopy' ||
+/** Upgrades older saved drafts and cart items. Version 1 treated full and half walls as one choice. */
+function migrate(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.version !== 1) return value
+  const { doubleSided, ...rest } = value
+  const print = doubleSided === true ? 'double' : 'single'
+  return value.walls === 'half'
+    ? { ...rest, version: 2, walls: 'none', wallPrint: 'single', halfWalls: print }
+    : { ...rest, version: 2, wallPrint: print, halfWalls: 'none' }
+}
+
+export function parseConfiguration(input: unknown): Configuration {
+  const value = isObject(input) ? migrate(input) : input
+  if (!isObject(value) || value.version !== 2 || value.productId !== 'canopy' ||
     !variants.some(item => item.id === value.variantId) ||
     !frames.some(item => item.id === value.frame) || !walls.some(item => item.id === value.walls) ||
-    typeof value.doubleSided !== 'boolean' || !Number.isInteger(value.quantity) ||
-    !inRange(value.quantity, 1, 100) || !isObject(value.panels)) {
+    !prints.some(item => item.id === value.wallPrint) || !halfWalls.some(item => item.id === value.halfWalls) ||
+    (value.walls === 'three' && value.halfWalls !== 'none') ||
+    !Number.isInteger(value.quantity) || !inRange(value.quantity, 1, 100) || !isObject(value.panels)) {
     throw new Error('Choose a valid tent configuration.')
   }
   const panels = value.panels
@@ -38,7 +50,7 @@ export function parseConfiguration(value: unknown): Configuration {
       throw new Error('Invalid artwork on ' + section.label + '.')
     }
   }
-  const { version, productId, variantId, frame, walls: wallChoice, doubleSided, quantity } = value
+  const { productId, variantId, frame, walls: wallChoice, wallPrint, halfWalls: halfChoice, quantity } = value
   const cleanPanels = Object.fromEntries(sections.map(({ id }) => {
     const panel = panels[id] as Configuration['panels'][typeof id]
     return [id, { color: panel.color, layers: panel.layers.map(layer => {
@@ -48,14 +60,32 @@ export function parseConfiguration(value: unknown): Configuration {
         : { id, x, y, width, angle, type: layer.type, assetId: layer.assetId, name: layer.name, ratio: layer.ratio }
     }) }]
   }))
-  return { version, productId, variantId, frame, walls: wallChoice, doubleSided, quantity, panels: cleanPanels } as Configuration
+  return {
+    version: 2, productId, variantId, frame, walls: wallChoice, wallPrint, halfWalls: halfChoice, quantity, panels: cleanPanels,
+  } as Configuration
 }
 
-export type QuoteLine = { id: string; label: string; unitAmount: number }
+/**
+ * One priced component of a single tent. `sku` identifies the Shopify product variant that a real
+ * adapter would add, and `units` is how many of that variant one tent needs (for example, decorated panels).
+ */
+export type QuoteLine = { id: string; label: string; sku: string; units: number; unitAmount: number }
 export type Quote = {
   id: string; currency: 'USD'; quantity: number; unitAmount: number; total: number; lines: QuoteLine[]
 }
+/** Mirrors the Shopify Storefront API `CartLineInput` so a real adapter can forward it to `cartLinesAdd`. */
+export type ShopifyLine = { merchandiseId: string; quantity: number; attributes: { key: string; value: string }[] }
 export type CartItem = {
-  id: string; createdAt: string; configuration: Configuration; quote: Quote; proofFile: string
-  shopify: { merchandiseId: string; quantity: number; attributes: { key: string; value: string }[] }[]
+  id: string; createdAt: string; configuration: Configuration; quote: Quote; proofFile: string; shopify: ShopifyLine[]
+}
+
+/** Restores a cart item from browser storage, discarding anything malformed or from an older pricing version. */
+export function parseCartItem(value: unknown): CartItem | undefined {
+  try {
+    if (!isObject(value) || typeof value.id !== 'string' || typeof value.proofFile !== 'string' ||
+      !isObject(value.quote) || !Number.isInteger(value.quote.total) || !Array.isArray(value.quote.lines) ||
+      !value.quote.lines.every(line => isObject(line) && typeof line.sku === 'string') ||
+      !Array.isArray(value.shopify)) return undefined
+    return { ...value, configuration: parseConfiguration(value.configuration) } as CartItem
+  } catch { return undefined }
 }

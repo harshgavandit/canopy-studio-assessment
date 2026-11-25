@@ -1,4 +1,4 @@
-import { frames, sectionFor, variantFor, visibleSections, walls, type Configuration, type Section } from './catalog.ts'
+import { isDoubleSided, isHalfWall, optionSummary, sectionFor, visibleSections, type Configuration, type Section } from './catalog.ts'
 import type { Quote } from './contract.ts'
 import { paintPanel, panelRatio } from './art.ts'
 
@@ -11,9 +11,6 @@ export async function downloadProof(config: Configuration, quote: Quote, id: str
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(config)))
   const fingerprint = Array.from(new Uint8Array(digest).slice(0, 12), byte => byte.toString(16).padStart(2, '0')).join('')
   const proofId = id || ('draft-' + fingerprint)
-  const size = variantFor(config.variantId).label
-  const frame = frames.find(item => item.id === config.frame)!.label
-  const wall = walls.find(item => item.id === config.walls)!.label
   const title = (label: string) => {
     doc.setFillColor('#263634')
     doc.rect(0, 0, 210, 35, 'F')
@@ -32,19 +29,29 @@ export async function downloadProof(config: Configuration, quote: Quote, id: str
   title('Canopy production proof')
   doc.setFontSize(11)
   doc.text('Configuration  ' + proofId, 16, 47)
-  doc.text('Variant  ' + size + '    |    Frame  ' + frame, 16, 55)
-  doc.text('Walls  ' + wall + (config.walls !== 'none' ? ' (' + (config.doubleSided ? 'double-sided' : 'single-sided') + ')' : ''), 16, 63)
-  doc.text('Quantity  ' + config.quantity + '    |    Quote  ' + quote.id, 16, 71)
-  let y = 85
+  let y = 55
+  for (const [label, value] of [...Object.entries(optionSummary(config)), ['Quantity', String(config.quantity)], ['Quote', quote.id]]) {
+    doc.setFont('helvetica', 'bold')
+    doc.text(label, 16, y)
+    doc.setFont('helvetica', 'normal')
+    doc.text(value, 52, y)
+    y += 7
+  }
+  y += 6
   for (const line of quote.lines) {
     doc.text(line.label, 16, y)
     doc.text(money(line.unitAmount) + ' / unit', 194, y, { align: 'right' })
     y += 7
   }
+  doc.text('Per tent  ' + money(quote.unitAmount) + '  x  ' + quote.quantity, 194, y + 1, { align: 'right' })
+  y += 5
   doc.setFont('helvetica', 'bold')
   doc.text('Quoted total', 16, y + 5)
   doc.text(money(quote.total) + ' USD', 194, y + 5, { align: 'right' })
-  if (preview) {
+  if (!preview) {
+    doc.setFont('helvetica', 'normal')
+    doc.text('Panel views follow on the next pages.', 16, y + 22)
+  } else {
     const dimensions = doc.getImageProperties(preview)
     const maxHeight = 266 - (y + 20)
     const scale = Math.min(178 / dimensions.width, maxHeight / dimensions.height)
@@ -57,7 +64,7 @@ export async function downloadProof(config: Configuration, quote: Quote, id: str
     const panel = config.panels[section.id]
     const canvas = document.createElement('canvas')
     canvas.width = 1280
-    canvas.height = Math.round(canvas.width * panelRatio(section, config.walls))
+    canvas.height = Math.round(canvas.width * panelRatio(section, config))
     const drawing = canvas.getContext('2d')!
     drawing.fillStyle = '#ffffff'
     drawing.fillRect(0, 0, canvas.width, canvas.height)
@@ -66,19 +73,22 @@ export async function downloadProof(config: Configuration, quote: Quote, id: str
     doc.addImage(canvas.toDataURL('image/jpeg', .94), 'JPEG', 16, 47, 175, imageHeight)
     let position = 47 + imageHeight + 13
     doc.setFontSize(10)
-    doc.text('Background  ' + panel.color.toUpperCase(), 16, position)
+    doc.text('Background  ' + panel.color.toUpperCase() +
+      (section.kind === 'wall' ? '    |    ' + (isHalfWall(config, section.id) ? 'Half wall, ' : 'Full wall, ') +
+        (isDoubleSided(config, section.id) ? 'double-sided print' : 'single-sided print') : ''), 16, position)
     position += 9
     for (const [index, layer] of panel.layers.entries()) {
-      if (position > 258) {
-        footer()
-        doc.addPage()
-        title(section.label + ' / artwork')
-        position = 49
-      }
       const label = layer.type === 'text'
         ? 'Text: ' + layer.text + '  [' + layer.font + (layer.bold ? ' Bold' : '') + ', ' + layer.color + ']'
         : 'Image: ' + layer.name + '  [' + layer.assetId + ']'
       const lines: string[] = doc.splitTextToSize((index + 1) + '. ' + label, 176)
+      if (position + lines.length * 5 + 5 > 276) {
+        footer()
+        doc.addPage()
+        title(section.label + ' / artwork')
+        doc.setFontSize(10)
+        position = 49
+      }
       doc.text(lines, 16, position)
       position += lines.length * 5
       doc.text('X ' + Math.round(layer.x * 100) + '%   Y ' + Math.round(layer.y * 100) +

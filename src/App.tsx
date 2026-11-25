@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { artwork, importArtwork } from './art.ts'
-import { clamp, fonts, frames, newConfiguration, sectionFor, swatches, variants, visibleSections, walls,
-  type Configuration, type Layer, type PanelId } from './catalog.ts'
-import type { CartItem, Quote } from './contract.ts'
+import { clamp, fonts, frames, halfWalls, halfWallsAllowed, newConfiguration, optionSummary, prints, sectionFor, swatches,
+  variants, visibleSections, walls, type Configuration, type Layer, type PanelId } from './catalog.ts'
+import { parseConfiguration, type CartItem, type Quote } from './contract.ts'
 import Editor from './Editor.tsx'
 import Icon from './Icon.tsx'
 import type { PreviewApi } from './Preview.tsx'
@@ -22,19 +22,36 @@ function quoteKey(config: Configuration) {
   const decorated = visibleSections(config).map(({ id }) =>
     config.panels[id].layers.some(layer => layer.type === 'image' || layer.text.trim()) ? id : '',
   ).join(',')
-  return [config.variantId, config.frame, config.walls, config.doubleSided, config.quantity, decorated].join('|')
+  return [config.variantId, config.frame, config.walls, config.wallPrint, config.halfWalls, config.quantity, decorated].join('|')
 }
 
 async function request<T>(route: string, data: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch('/api/' + route, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data), signal,
   })
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('The configuration service is unavailable. Please try again.')
+  }
   const payload = await response.json()
   if (!response.ok) throw new Error(payload.error || 'The request failed.')
   return payload as T
 }
 
-function notifyHost(type: 'ready' | 'resize' | 'saved' | 'cart', payload: object) {
+/** Number input that keeps a local draft, so an empty or partial entry doesn't snap the value. */
+function NumberField({ label, value, min, max, onValue }: {
+  label: string; value: number; min: number; max: number; onValue: (value: number) => void
+}) {
+  const [draft, setDraft] = useState<string>()
+  return <label className="field">{label}<input type="number" min={min} max={max} value={draft ?? String(value)}
+    onChange={event => {
+      const text = event.target.value
+      setDraft(text)
+      if (text.trim() !== '' && Number.isFinite(Number(text))) onValue(Number(text))
+    }}
+    onBlur={() => setDraft(undefined)} /></label>
+}
+
+function notifyHost(type: 'ready' | 'resize' | 'saved' | 'cart' | 'cart-open', payload: object) {
   if (!embed || window.parent === window) return
   const raw = new URLSearchParams(location.search).get('parent_origin')
   if (!raw) return
@@ -50,6 +67,7 @@ export default function App() {
   const [config, setConfig] = useState(initialDraft)
   const current = useRef(config)
   const past = useRef<Configuration[]>([])
+  const lastEdit = useRef({ tag: '', at: 0 })
   const future = useRef<Configuration[]>([])
   const [historyRevision, syncHistory] = useState(0)
   const [assetRevision, setAssetRevision] = useState(0)
@@ -116,8 +134,10 @@ export default function App() {
   }, [key, tryQuote])
 
   useEffect(() => {
-    const timer = setTimeout(() => saveDraft(config), 125)
-    return () => clearTimeout(timer)
+    const flush = () => saveDraft(current.current)
+    const timer = setTimeout(flush, 125)
+    window.addEventListener('pagehide', flush)
+    return () => { clearTimeout(timer); window.removeEventListener('pagehide', flush) }
   }, [config])
 
   useEffect(() => {
@@ -126,9 +146,27 @@ export default function App() {
   }, [config, panel])
 
   useEffect(() => {
-    if (cartOpen) cartDialog.current?.showModal()
+    if (cartOpen) {
+      cartDialog.current?.showModal()
+      notifyHost('cart-open', {})
+    }
     else cartDialog.current?.close()
   }, [cartOpen])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      const target = event.target as HTMLElement
+      if (target.closest('input, textarea, select, [contenteditable="true"], dialog[open]')) return
+      const key = event.key.toLowerCase()
+      if (key === 'z' || key === 'y') {
+        event.preventDefault()
+        moveHistory(key === 'y' || event.shiftKey ? 'redo' : 'undo')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   useEffect(() => {
     if (!notice) return
@@ -137,25 +175,35 @@ export default function App() {
   }, [notice])
 
   function mark() {
+    lastEdit.current = { tag: '', at: 0 }
     past.current = [...past.current.slice(-49), current.current]
     future.current = []
     syncHistory(n => n + 1)
   }
 
-  function apply(next: Configuration, remember = true) {
-    if (remember) mark()
+  /**
+   * `remember` adds an undo step. A string tag groups rapid repeats of the same edit (typing,
+   * dragging a color picker, nudging) into one step.
+   */
+  function apply(next: Configuration, remember: boolean | string = true) {
+    if (typeof remember === 'string') {
+      const now = Date.now()
+      const repeat = lastEdit.current.tag === remember && now - lastEdit.current.at < 1200
+      if (!repeat) mark()
+      lastEdit.current = { tag: remember, at: now }
+    } else if (remember) mark()
     current.current = next
     setConfig(next)
   }
 
-  function patch(data: Partial<Configuration>) { apply({ ...current.current, ...data }) }
+  function patch(data: Partial<Configuration>, remember: boolean | string = true) { apply({ ...current.current, ...data }, remember) }
 
-  function replacePanel(id: PanelId, data: Partial<Configuration['panels'][PanelId]>, remember = true) {
+  function replacePanel(id: PanelId, data: Partial<Configuration['panels'][PanelId]>, remember: boolean | string = true) {
     const prev = current.current
     apply({ ...prev, panels: { ...prev.panels, [id]: { ...prev.panels[id], ...data } } }, remember)
   }
 
-  function setLayer(id: string, data: Partial<Layer>, remember = true) {
+  function setLayer(id: string, data: Partial<Layer>, remember: boolean | string = 'layer:' + id + ':' + Object.keys(data).join()) {
     replacePanel(panel, { layers: current.current.panels[panel].layers.map(item =>
       item.id === id ? { ...item, ...data } as Layer : item) }, remember)
   }
@@ -186,7 +234,7 @@ export default function App() {
       : colorTarget === 'valances' ? allowedSections.filter(item => item.kind === 'valance').map(item => item.id) : [panel]
     if (ids.every(id => panels[id].color === value)) return
     for (const id of ids) panels[id] = { ...panels[id], color: value }
-    apply({ ...previous, panels })
+    apply({ ...previous, panels }, 'color:' + ids.join())
   }
 
   function append(id: PanelId, layer: Layer) {
@@ -228,6 +276,11 @@ export default function App() {
     finally { setBusy(undefined) }
   }
 
+  function removeLayer(id: string) {
+    replacePanel(panel, { layers: current.current.panels[panel].layers.filter(item => item.id !== id) })
+    setSelectId(undefined)
+  }
+
   function orderLayer(id: string, change: number) {
     const layers = [...selectedPanel.layers]
     const index = layers.findIndex(item => item.id === id)
@@ -254,7 +307,9 @@ export default function App() {
       setCart(updated)
       saveCart(updated)
       setCartOpen(true)
-      notifyHost('cart', { id: item.id, total: item.quote.total, currency: item.quote.currency, proofFile: item.proofFile })
+      notifyHost('cart', {
+        id: item.id, total: item.quote.total, currency: item.quote.currency, proofFile: item.proofFile, lines: item.shopify,
+      })
     } catch (err) {
       setError((err as Error).message)
       setTryQuote(n => n + 1)
@@ -265,8 +320,9 @@ export default function App() {
     const details = item?.quote ?? activeQuote
     if (!details || busy) return
     const configToExport = item?.configuration ?? current.current
+    const canonical = JSON.stringify(parseConfiguration(configToExport))
     const saved = item ?? [...cart].reverse().find(entry =>
-      entry.quote.id === details.id && JSON.stringify(entry.configuration) === JSON.stringify(configToExport))
+      entry.quote.id === details.id && JSON.stringify(entry.configuration) === canonical)
     setBusy('pdf')
     setError('')
     try {
@@ -297,7 +353,7 @@ export default function App() {
     <div className={'app-shell' + (embed ? ' embedded' : '')} data-history={historyRevision}>
       <header className="topbar">
         <div className="container topline">
-          <a className="brand" href="/" aria-label="Canopy Studio home"><span className="brand-mark"><Icon name="logo" size={25} /></span><span>CANOPY<span className="brand-light">STUDIO</span></span></a>
+          <a className="brand" href={embed ? location.pathname + location.search : "/"} aria-label="Canopy Studio home"><span className="brand-mark"><Icon name="logo" size={25} /></span><span>CANOPY<span className="brand-light">STUDIO</span></span></a>
           <div className="top-actions">
             <button className="text-button" onClick={save}><Icon name="check" size={16} />{embed ? 'Save & exit' : 'Save design'}</button>
             <button className="cart-button" aria-label={'Open cart, ' + cart.length + ' designs'} onClick={() => setCartOpen(true)}><Icon name="cart" size={19} /><span>Cart</span><b>{cart.length}</b></button>
@@ -325,7 +381,7 @@ export default function App() {
               </div>
             </div>
             <div className={'stage ' + (mode === '2d' ? 'stage-editor' : 'stage-viewer')}>
-              <div className={'stage-layer' + (mode === '2d' ? ' visually-inactive' : '')} aria-hidden={mode === '2d'}>
+              <div className={'stage-layer' + (mode === '2d' ? ' visually-inactive' : '')} aria-hidden={mode === '2d'} inert={mode === '2d'}>
                 <Suspense fallback={null}><Preview config={config} revision={assetRevision} onApi={bindVisual} onSelect={id => { choosePanel(id); setTab('design') }} onStatus={setPreview} /></Suspense>
               </div>
               {mode === '3d' && <>
@@ -334,7 +390,8 @@ export default function App() {
                 {preview.kind === 'ready' && <div className="stage-hint">Drag to orbit <span>·</span> Scroll to zoom</div>}
               </>}
               {mode === '2d' && <Editor config={config} panel={selectedPanel} section={section} selected={selectId} revision={assetRevision}
-                onSelect={setSelectId} onMove={(id, data) => setLayer(id, data, false)} onDrag={mark} onEnd={() => saveDraft(current.current)} />}
+                onSelect={setSelectId} onMove={(id, data) => setLayer(id, data, false)} onDrag={mark} onEnd={() => saveDraft(current.current)}
+                onNudge={(id, data) => setLayer(id, data, 'nudge:' + id)} onRemove={removeLayer} />}
             </div>
             <div className="panel-bar">
               <div className="panel-bar-heading"><strong>Canopy panels</strong><span>{allowedSections.length} editable sections</span></div>
@@ -399,15 +456,15 @@ export default function App() {
                     <label className="check-field"><input type="checkbox" checked={selected.bold} onChange={event => setLayer(selected.id, { bold: event.target.checked })} />Bold text</label>
                   </>}
                   <div className="form-pair">
-                    <label className="field">Position X (%)<input type="number" min="0" max="100" value={Math.round(selected.x * 100)} onChange={event => setLayer(selected.id, { x: clamp(Number(event.target.value) / 100, 0, 1) })} /></label>
-                    <label className="field">Position Y (%)<input type="number" min="0" max="100" value={Math.round(selected.y * 100)} onChange={event => setLayer(selected.id, { y: clamp(Number(event.target.value) / 100, 0, 1) })} /></label>
-                    <label className="field">Width (%)<input type="number" min="4" max="130" value={Math.round(selected.width * 100)} onChange={event => setLayer(selected.id, { width: clamp(Number(event.target.value) / 100, .04, 1.3) })} /></label>
-                    <label className="field">Rotation (°)<input type="number" min="-180" max="180" value={selected.angle} onChange={event => setLayer(selected.id, { angle: clamp(Number(event.target.value), -180, 180) })} /></label>
+                    <NumberField label="Position X (%)" min={0} max={100} value={Math.round(selected.x * 100)} onValue={n => setLayer(selected.id, { x: clamp(n / 100, 0, 1) })} />
+                    <NumberField label="Position Y (%)" min={0} max={100} value={Math.round(selected.y * 100)} onValue={n => setLayer(selected.id, { y: clamp(n / 100, 0, 1) })} />
+                    <NumberField label="Width (%)" min={4} max={130} value={Math.round(selected.width * 100)} onValue={n => setLayer(selected.id, { width: clamp(n / 100, .04, 1.3) })} />
+                    <NumberField label="Rotation (°)" min={-180} max={180} value={selected.angle} onValue={n => setLayer(selected.id, { angle: clamp(Math.round(n), -180, 180) })} />
                   </div>
                   <div className="layer-actions">
-                    <button className="icon-button" aria-label="Bring layer forward" title="Bring layer forward" onClick={() => orderLayer(selected.id, 1)}><Icon name="up" /></button>
-                    <button className="icon-button" aria-label="Send layer backward" title="Send layer backward" onClick={() => orderLayer(selected.id, -1)}><Icon name="down" /></button>
-                    <button className="text-button danger" onClick={() => { replacePanel(panel, { layers: selectedPanel.layers.filter(item => item.id !== selected.id) }); setSelectId(undefined) }}><Icon name="trash" size={16} /> Remove layer</button>
+                    <button className="icon-button" disabled={selected === selectedPanel.layers.at(-1)} aria-label="Bring layer forward" title="Bring layer forward" onClick={() => orderLayer(selected.id, 1)}><Icon name="up" /></button>
+                    <button className="icon-button" disabled={selected === selectedPanel.layers[0]} aria-label="Send layer backward" title="Send layer backward" onClick={() => orderLayer(selected.id, -1)}><Icon name="down" /></button>
+                    <button className="text-button danger" onClick={() => removeLayer(selected.id)}><Icon name="trash" size={16} /> Remove layer</button>
                   </div>
                 </div>}
               </> : <>
@@ -415,9 +472,14 @@ export default function App() {
                 <div className="options-fields">
                   <label className="field">Tent size<select value={config.variantId} onChange={event => patch({ variantId: event.target.value as Configuration['variantId'] })}>{variants.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
                   <label className="field">Frame<select value={config.frame} onChange={event => patch({ frame: event.target.value as Configuration['frame'] })}>{frames.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
-                  <label className="field">Walls<select value={config.walls} onChange={event => patch({ walls: event.target.value as Configuration['walls'], doubleSided: event.target.value === 'none' ? false : config.doubleSided })}>{walls.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
-                  {config.walls !== 'none' && <label className="check-field"><input type="checkbox" checked={config.doubleSided} onChange={event => patch({ doubleSided: event.target.checked })} />Double-sided wall printing</label>}
-                  <label className="field">Quantity<input type="number" min="1" max="100" value={config.quantity} onChange={event => patch({ quantity: clamp(Math.round(Number(event.target.value)), 1, 100) })} /></label>
+                  <label className="field">Side walls<select value={config.walls} onChange={event => {
+                    const next = event.target.value as Configuration['walls']
+                    patch({ walls: next, halfWalls: halfWallsAllowed({ walls: next }) ? config.halfWalls : 'none' })
+                  }}>{walls.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+                  {config.walls !== 'none' && <label className="field">Side wall print<select value={config.wallPrint} onChange={event => patch({ wallPrint: event.target.value as Configuration['wallPrint'] })}>{prints.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+                  <label className="field">Half walls<select value={config.halfWalls} disabled={!halfWallsAllowed(config)} onChange={event => patch({ halfWalls: event.target.value as Configuration['halfWalls'] })}>{halfWalls.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+                  {!halfWallsAllowed(config) && <p className="field-note">Half walls are not available with 3 full side walls.</p>}
+                  <NumberField label="Quantity" min={1} max={100} value={config.quantity} onValue={n => patch({ quantity: clamp(Math.round(n), 1, 100) }, 'quantity')} />
                   <button className="outline-button" onClick={() => { apply(newConfiguration()); choosePanel('front-roof'); setNotice('Blank design started.') }}>Start a blank design</button>
                 </div>
               </>}
@@ -442,8 +504,8 @@ export default function App() {
           <div className="controls-title"><div><p className="eyebrow">DEMO CART</p><h2>Your designs</h2></div><button className="icon-button" onClick={() => setCartOpen(false)} aria-label="Close cart"><Icon name="close" /></button></div>
           {!cart.length && <p className="muted">Your cart is empty.</p>}
           {cart.map(item => <article className="cart-item" key={item.id}>
-            <div><strong>{variants.find(v => v.id === item.configuration.variantId)?.label} canopy</strong><b>{money(item.quote.total)}</b></div>
-            <p>{item.configuration.quantity} × {frames.find(f => f.id === item.configuration.frame)?.label}{item.configuration.walls !== 'none' ? ' · ' + walls.find(w => w.id === item.configuration.walls)?.label : ''}</p>
+            <div><strong>{optionSummary(item.configuration).Size} canopy</strong><b>{money(item.quote.total)}</b></div>
+            <p>{item.configuration.quantity} × {Object.entries(optionSummary(item.configuration)).filter(([key, value]) => key !== 'Size' && value !== 'None').map(([key, value]) => key === 'Frame' ? value : key + ': ' + value).join(' · ')}</p>
             <div><button className="text-button" disabled={!!busy} onClick={() => exportProof(item)}><Icon name="download" size={16} /> Production proof</button><button className="text-button danger" onClick={() => removeCart(item.id)}>Remove</button></div>
           </article>)}
           {!!cart.length && <div className="cart-total"><strong>Cart total</strong><b>{money(cart.reduce((total, item) => total + item.quote.total, 0))}</b></div>}

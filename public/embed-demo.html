@@ -11,6 +11,7 @@ h1{margin:0;font-size:1.5rem}p{margin:4px 0;color:#4d675c}
 iframe{width:100%;display:block;min-height:790px;border:1px solid #b4c7b9;border-radius:12px;background:#f3f5ef}
 iframe[hidden]{display:none}
 a{color:#284d40}#event{font-size:.85rem}
+details{margin:8px 0;font-size:.8rem}pre{background:#fff;border:1px solid #c8d6cc;border-radius:8px;padding:10px;overflow:auto;max-height:260px}
 </style>
 </head>
 <body>
@@ -18,6 +19,7 @@ a{color:#284d40}#event{font-size:.85rem}
 <header><div><h1>Embedded tent configurator</h1><p>A host page containing the Canopy Studio iframe.</p></div><a href="/">Return to the standalone designer</a></header>
 <p id="event" role="status">Connecting to the configurator…</p>
 <button id="reopen" hidden>Reopen designer</button>
+<details id="payload" hidden><summary>Shopify cart payload received from the configurator</summary><pre></pre></details>
 <iframe id="designer" title="Canopy Studio configurator" sandbox="allow-scripts allow-same-origin allow-downloads"></iframe>
 </main>
 <script>
@@ -36,7 +38,15 @@ window.addEventListener('message', event => {
   if (event.origin !== designer.origin || event.source !== frame.contentWindow || message?.source !== 'canopy-studio') return;
   if (message.type === 'ready') status.textContent = 'Configurator connected.';
   if (message.type === 'saved') { status.textContent = 'The host received the saved design.'; frame.hidden = true; reopen.hidden = false; reopen.focus(); }
-  if (message.type === 'cart') status.textContent = 'The host received cart configuration ' + message.id + '.';
+  if (message.type === 'cart') {
+    status.textContent = 'The host received cart configuration ' + message.id + '.';
+    // A Shopify theme would forward these lines to the Storefront API `cartLinesAdd` mutation
+    // (or map them to /cart/add.js items) after swapping the mock IDs for real variant IDs.
+    const payload = document.getElementById('payload');
+    payload.hidden = false;
+    payload.querySelector('pre').textContent = JSON.stringify({ lines: message.lines }, null, 2);
+  }
+  if (message.type === 'cart-open') frame.scrollIntoView({block: 'start'});
   if (message.type === 'resize' && Number.isFinite(message.height)) frame.style.height = Math.max(790, Math.min(3600, message.height + 6)) + 'px';
 });
 frame.src = designer.href;

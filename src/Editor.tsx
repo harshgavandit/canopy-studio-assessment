@@ -2,10 +2,11 @@ import { useEffect, useRef, type PointerEvent } from 'react'
 import { hitLayer, layerBounds, paintPanel, panelRatio, pathFor } from './art.ts'
 import { clamp, type Configuration, type Layer, type Panel, type Section } from './catalog.ts'
 
-export default function Editor({ panel, section, config, selected, revision, onSelect, onMove, onDrag, onEnd }: {
+export default function Editor({ panel, section, config, selected, revision, onSelect, onMove, onDrag, onEnd, onNudge, onRemove }: {
   panel: Panel; section: Section; config: Configuration; selected?: string; revision: number
   onSelect: (id?: string) => void; onMove: (id: string, data: Partial<Layer>) => void
   onDrag: () => void; onEnd: () => void
+  onNudge: (id: string, data: Partial<Layer>) => void; onRemove: (id: string) => void
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const drag = useRef<{
@@ -13,7 +14,7 @@ export default function Editor({ panel, section, config, selected, revision, onS
     resize?: { angle: number; startWidth: number; startX: number }
   } | null>(null)
   const width = 960
-  const height = Math.round(width * panelRatio(section, config.walls))
+  const height = Math.round(width * panelRatio(section, config))
   const pad = 22
 
   useEffect(() => {
@@ -46,7 +47,22 @@ export default function Editor({ panel, section, config, selected, revision, onS
     <div className="editor-wrap">
       <div className="editor-title"><strong>{section.label}</strong><span>{section.kind === 'roof' ? 'Roof panel' : section.kind === 'valance' ? 'Canopy skirt' : 'Wall panel'}</span></div>
       <canvas ref={ref} width={width + pad * 2} height={height + pad * 2}
-        className="editor-canvas" aria-label={'2D artwork for ' + section.label}
+        className="editor-canvas" tabIndex={0}
+        aria-label={'2D artwork for ' + section.label + '. Click a layer to select it, drag to move, drag a corner to resize. Arrow keys nudge the selected layer; Delete removes it.'}
+        onKeyDown={event => {
+          const active = panel.layers.find(item => item.id === selected)
+          if (!active) return
+          const step = event.shiftKey ? .05 : .01
+          const moves: Record<string, Partial<Layer>> = {
+            ArrowLeft: { x: clamp(active.x - step, 0, 1) }, ArrowRight: { x: clamp(active.x + step, 0, 1) },
+            ArrowUp: { y: clamp(active.y - step, 0, 1) }, ArrowDown: { y: clamp(active.y + step, 0, 1) },
+          }
+          if (moves[event.key]) onNudge(active.id, moves[event.key])
+          else if (event.key === 'Delete' || event.key === 'Backspace') onRemove(active.id)
+          else if (event.key === 'Escape') onSelect(undefined)
+          else return
+          event.preventDefault()
+        }}
         onPointerDown={event => {
           const [x, y] = point(event)
           const context = event.currentTarget.getContext('2d')!

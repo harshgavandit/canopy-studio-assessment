@@ -14,7 +14,7 @@ const localApi: Plugin = {
 }
 
 export default defineConfig({
-  publicDir: 'Tent_glb (1)',
+  publicDir: 'public',
   plugins: [localApi],
   build: { rollupOptions: { output: { manualChunks(id) {
     if (id.includes('/node_modules/three/')) return 'three'

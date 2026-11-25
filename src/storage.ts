@@ -1,6 +1,6 @@
 import { artwork, loadImage } from './art.ts'
 import { newConfiguration, visibleSections, type Configuration } from './catalog.ts'
-import { parseConfiguration, type CartItem } from './contract.ts'
+import { parseCartItem, parseConfiguration, type CartItem } from './contract.ts'
 const draftKey = 'canopy-studio-draft-v1'
 const cartKey = 'canopy-studio-cart-v1'
 
@@ -27,7 +27,7 @@ export function saveDraft(config: Configuration) {
 export function loadCart(): CartItem[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(cartKey) || '[]')
-    return Array.isArray(saved) ? saved : []
+    return Array.isArray(saved) ? saved.flatMap(item => parseCartItem(item) ?? []) : []
   } catch { return [] }
 }
 export function saveCart(cart: CartItem[]) {

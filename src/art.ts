@@ -1,4 +1,4 @@
-import { clamp, type Layer, type Panel, type Section } from './catalog.ts'
+import { clamp, isHalfWall, type Configuration, type Layer, type Panel, type Section } from './catalog.ts'
 
 export const artwork = new Map<string, HTMLImageElement>()
 
@@ -35,11 +35,11 @@ export function layerBounds(ctx: CanvasRenderingContext2D, layer: Layer, w: numb
 
 export function paintPanel(
   ctx: CanvasRenderingContext2D, panel: Panel, section: Section, w: number, h: number,
-  options: { clip?: boolean; selected?: string; guides?: boolean } = {},
+  options: { selected?: string; guides?: boolean } = {},
 ) {
   ctx.save()
   pathFor(ctx, section.kind, w, h)
-  if (options.clip !== false) ctx.clip()
+  ctx.clip()
   ctx.fillStyle = panel.color
   ctx.fillRect(0, 0, w, h)
   for (const layer of panel.layers) {
@@ -90,10 +90,11 @@ export function paintPanel(
   ctx.restore()
 }
 
-export function panelRatio(section: Section, wallMode: string) {
+/** Height / width of a panel's printable area. Half walls are shorter than full walls. */
+export function panelRatio(section: Section, config: Pick<Configuration, 'walls' | 'wallPrint' | 'halfWalls'>) {
   if (section.kind === 'roof') return 0.49
   if (section.kind === 'valance') return 0.135
-  return wallMode === 'half' ? 0.31 : 0.58
+  return isHalfWall(config, section.id) ? 0.31 : 0.58
 }
 
 export function hitLayer(ctx: CanvasRenderingContext2D, panel: Panel, px: number, py: number, w: number, h: number) {

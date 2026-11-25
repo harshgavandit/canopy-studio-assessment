@@ -25,10 +25,20 @@ export const frames = [
 ] as const
 
 export const walls = [
-  { id: 'none', label: 'No walls' },
-  { id: 'back', label: '1 full wall' },
-  { id: 'three', label: '3 full walls' },
-  { id: 'half', label: '2 half walls' },
+  { id: 'none', label: 'No side walls' },
+  { id: 'back', label: '1 full side wall' },
+  { id: 'three', label: '3 full side walls' },
+] as const
+
+export const prints = [
+  { id: 'single', label: 'Single-sided print' },
+  { id: 'double', label: 'Double-sided print' },
+] as const
+
+export const halfWalls = [
+  { id: 'none', label: 'No half walls' },
+  { id: 'single', label: 'Half walls (set of 2), single-sided' },
+  { id: 'double', label: 'Half walls (set of 2), double-sided' },
 ] as const
 
 export const swatches = ['#ed663f', '#f4eee2', '#273853', '#2d5749', '#141a20', '#c6a36b', '#98473b', '#6987a5']
@@ -37,6 +47,8 @@ export type PanelId = typeof sections[number]['id']
 export type VariantId = typeof variants[number]['id']
 export type Frame = typeof frames[number]['id']
 export type Walls = typeof walls[number]['id']
+export type Print = typeof prints[number]['id']
+export type HalfWalls = typeof halfWalls[number]['id']
 export type Section = typeof sections[number]
 
 export type Placement = { id: string; x: number; y: number; width: number; angle: number }
@@ -47,26 +59,44 @@ export type ImageLayer = Placement & { type: 'image'; assetId: string; name: str
 export type Layer = TextLayer | ImageLayer
 export type Panel = { color: string; layers: Layer[] }
 export type Configuration = {
-  version: 1
+  version: 2
   productId: 'canopy'
   variantId: VariantId
   frame: Frame
   walls: Walls
-  doubleSided: boolean
+  wallPrint: Print
+  halfWalls: HalfWalls
   quantity: number
   panels: Record<PanelId, Panel>
 }
 
-export const product = { id: 'canopy', name: 'Canopy tent', sections, variants, frames, walls } as const
+export const product = { id: 'canopy', name: 'Canopy tent', sections, variants, frames, walls, prints, halfWalls } as const
 export const catalog = { canopy: product }
 export const variantFor = (id: VariantId) => variants.find(item => item.id === id)!
 export const sectionFor = (id: PanelId) => sections.find(item => item.id === id)!
-export const visibleSections = (config: Configuration) => sections.filter(section => {
+type WallOptions = Pick<Configuration, 'walls' | 'wallPrint' | 'halfWalls'>
+/** Half walls are sold as a side pair and cannot be combined with three full walls. */
+export const halfWallsAllowed = (config: Pick<Configuration, 'walls'>) => config.walls !== 'three'
+export const isHalfWall = (config: WallOptions, id: PanelId) =>
+  id !== 'back-wall' && halfWallsAllowed(config) && config.halfWalls !== 'none'
+export const isDoubleSided = (config: WallOptions, id: PanelId) =>
+  isHalfWall(config, id) ? config.halfWalls === 'double' : config.wallPrint === 'double'
+export const visibleSections = (config: WallOptions) => sections.filter(section => {
   if (section.kind !== 'wall') return true
-  if (config.walls === 'three') return true
-  if (config.walls === 'back') return section.id === 'back-wall'
-  return config.walls === 'half' && section.id !== 'back-wall'
+  if (section.id === 'back-wall') return config.walls !== 'none'
+  return config.walls === 'three' || isHalfWall(config, section.id)
 })
+/** Human-readable option summary shared by the UI, the PDF and Shopify line properties. */
+export function optionSummary(config: Configuration): Record<string, string> {
+  const print = (id: Print) => prints.find(item => item.id === id)!.label.toLowerCase()
+  return {
+    Size: variantFor(config.variantId).label,
+    Frame: frames.find(item => item.id === config.frame)!.label,
+    'Side walls': config.walls === 'none' ? 'None'
+      : walls.find(item => item.id === config.walls)!.label + ', ' + print(config.wallPrint),
+    'Half walls': isHalfWall(config, 'left-wall') ? 'Set of 2, ' + print(config.halfWalls as Print) : 'None',
+  }
+}
 export const clamp = (number: number, min: number, max: number) => Math.max(min, Math.min(max, number))
 
 export function newConfiguration(): Configuration {
@@ -74,7 +104,7 @@ export function newConfiguration(): Configuration {
     section.id, { color: section.kind === 'roof' ? '#ed663f' : '#d95031', layers: [] },
   ])) as Configuration['panels']
   return {
-    version: 1, productId: 'canopy', variantId: '8x8', frame: 'standard', walls: 'none',
-    doubleSided: false, quantity: 1, panels,
+    version: 2, productId: 'canopy', variantId: '8x8', frame: 'standard', walls: 'none',
+    wallPrint: 'single', halfWalls: 'none', quantity: 1, panels,
   }
 }
