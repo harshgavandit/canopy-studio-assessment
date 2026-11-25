@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vercel/
+.env*
+!.env.example
+*.log
+test-results/
+Instruction & reference link (1).pdf

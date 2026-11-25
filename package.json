@@ -1,0 +1,26 @@
+{
+  "name": "canopy-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "jspdf": "^3.0.4",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.186.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

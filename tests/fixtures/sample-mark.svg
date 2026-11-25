@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 160">
+ <rect width="360" height="160" rx="18" fill="#242a3c"/>
+ <path d="m25 120 61-88 41 57 18-24 40 55z" fill="#ebac4d"/>
+ <text x="199" y="101" fill="white" font-family="Arial,sans-serif" font-size="46" font-weight="bold">NORTH</text>
+ <circle cx="308" cy="30" r="10" fill="#ed663f"/>
+</svg>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canopy Studio embed demo</title>
+<style>
+body{margin:0;background:#e8efeb;color:#263c34;font:16px system-ui,sans-serif}
+main{max-width:1270px;margin:auto;padding:20px 12px}
+header{display:flex;justify-content:space-between;align-items:center;gap:13px;flex-wrap:wrap;margin-bottom:14px}
+h1{margin:0;font-size:1.5rem}p{margin:4px 0;color:#4d675c}
+iframe{width:100%;display:block;min-height:790px;border:1px solid #b4c7b9;border-radius:12px;background:#f3f5ef}
+iframe[hidden]{display:none}
+a{color:#284d40}#event{font-size:.85rem}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Embedded tent configurator</h1><p>A host page containing the Canopy Studio iframe.</p></div><a href="/">Return to the standalone designer</a></header>
+<p id="event" role="status">Connecting to the configurator…</p>
+<button id="reopen" hidden>Reopen designer</button>
+<iframe id="designer" title="Canopy Studio configurator" sandbox="allow-scripts allow-same-origin allow-downloads"></iframe>
+</main>
+<script>
+const frame = document.getElementById('designer');
+const status = document.getElementById('event');
+const reopen = document.getElementById('reopen');
+const designer = new URL('/', location.origin);
+if (new URLSearchParams(location.search).has('cross') && ['localhost', '127.0.0.1'].includes(location.hostname)) {
+  designer.hostname = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+}
+designer.searchParams.set('embed', '1');
+designer.searchParams.set('parent_origin', location.origin);
+reopen.onclick = () => { frame.hidden = false; reopen.hidden = true; frame.focus(); };
+window.addEventListener('message', event => {
+  const message = event.data;
+  if (event.origin !== designer.origin || event.source !== frame.contentWindow || message?.source !== 'canopy-studio') return;
+  if (message.type === 'ready') status.textContent = 'Configurator connected.';
+  if (message.type === 'saved') { status.textContent = 'The host received the saved design.'; frame.hidden = true; reopen.hidden = false; reopen.focus(); }
+  if (message.type === 'cart') status.textContent = 'The host received cart configuration ' + message.id + '.';
+  if (message.type === 'resize' && Number.isFinite(message.height)) frame.style.height = Math.max(790, Math.min(3600, message.height + 6)) + 'px';
+});
+frame.src = designer.href;
+</script>
+</body>
+</html>
