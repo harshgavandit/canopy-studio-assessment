@@ -16,6 +16,7 @@ a{color:inherit}
 .brand-light{color:#5a756a;font-weight:600;margin-left:4px}
 .top-actions,.toolbar-buttons,.layer-actions{display:flex;align-items:center;gap:9px}
 .top-actions{gap:19px}
+.top-actions .text-button{white-space:nowrap}
 .text-button,.cart-button,.icon-button,.edit-link,.proof-button{border:0;background:transparent;color:var(--ink);display:inline-flex;align-items:center;justify-content:center;gap:7px;font-weight:700;padding:7px;border-radius:8px;font-size:14px}
 .text-button:hover,.icon-button:hover,.edit-link:hover,.proof-button:hover{background:#edf1ed}
 .cart-button{border:1px solid #d7e0d8;background:white;padding:8px 10px 8px 13px;gap:8px}
