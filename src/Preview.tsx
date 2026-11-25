@@ -309,7 +309,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
           points.set(mapUV(index, uv.getX(i), 1 - uv.getY(i), panelRatio(section, design.walls)), i * 2)
         }
         geometry.setAttribute('uv1', new THREE.BufferAttribute(points, 2))
-        const plane = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map: texture, roughness: .89, side: design.doubleSided ? THREE.DoubleSide : THREE.FrontSide }))
+        const plane = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map: texture, roughness: .89, side: THREE.FrontSide }))
         const outward = axes[section.side]
         plane.position.copy(outward).multiplyScalar(span * .465)
         plane.position.y = design.walls === 'half' ? Math.min(eave - height / 2, height / 2 + .28) : eave - height / 2
@@ -317,14 +317,14 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
         plane.userData.panelId = section.id
         wallParts.push(plane)
         wallGroup.add(plane)
-        if (!design.doubleSided) {
-          const lining = new THREE.Mesh(new THREE.PlaneGeometry(span * .96, height),
-            new THREE.MeshStandardMaterial({ color: '#e9e1d2', roughness: .94, side: THREE.BackSide, polygonOffset: true, polygonOffsetFactor: -1 }))
-          lining.position.copy(plane.position).addScaledVector(outward, -.002)
-          lining.rotation.copy(plane.rotation)
-          wallParts.push(lining)
-          wallGroup.add(lining)
-        }
+        const lining = new THREE.Mesh(geometry.clone(), design.doubleSided
+          ? plane.material.clone()
+          : new THREE.MeshStandardMaterial({ color: '#e9e1d2', roughness: .94 }))
+        lining.position.copy(plane.position).addScaledVector(outward, -.002)
+        lining.rotation.y = plane.rotation.y + Math.PI
+        lining.userData.panelId = section.id
+        wallParts.push(lining)
+        wallGroup.add(lining)
       }
       if (design.frame === 'lighted') for (const axis of axes) {
         const light = new THREE.Mesh(new THREE.BoxGeometry(span * .9, .023, .026),

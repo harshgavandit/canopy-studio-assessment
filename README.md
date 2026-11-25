@@ -15,6 +15,8 @@ npm run build
 
 Open the URL shown by Vite. Navigate to `/embed-demo.html` to test the embedded experience.
 
+To run the browser regression suite against the production build, run `npm run build`, `npx playwright install chromium`, and `npm run test:browser`. Set `CANOPY_BROWSER` to use an existing Chromium or Edge executable.
+
 ## Design
 
 - **Configuration.** A versioned TypeScript record holds a variant, options, quantity, and a keyed collection of panels. Each panel owns its background and ordered text or image layers. Layer position and size use normalized coordinates, so window size and model changes preserve the design. Draft and cart records live in browser storage. Artwork is rasterized and stored in IndexedDB.

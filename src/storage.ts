@@ -1,5 +1,5 @@
 import { artwork, loadImage } from './art.ts'
-import { newConfiguration, type Configuration } from './catalog.ts'
+import { newConfiguration, visibleSections, type Configuration } from './catalog.ts'
 import { parseConfiguration, type CartItem } from './contract.ts'
 const draftKey = 'canopy-studio-draft-v1'
 const cartKey = 'canopy-studio-cart-v1'
@@ -69,21 +69,19 @@ export async function getStoredImage(id: string): Promise<string | undefined> {
 }
 
 export async function restoreImages(config: Configuration) {
-  const ids = [...new Set(Object.values(config.panels).flatMap(panel =>
-    panel.layers.flatMap(layer => layer.type === 'image' && !artwork.has(layer.assetId) ? [layer.assetId] : []),
-  ))]
-  if (!ids.length) return
-  const db = await database()
-  try {
-    const store = db.transaction('images', 'readonly').objectStore('images')
-    await Promise.all(ids.map(id => new Promise<void>((resolve, reject) => {
-      const request = store.get(id)
-      request.onsuccess = () => {
-        const data: unknown = request.result
-        if (typeof data !== 'string') return resolve()
-        loadImage(data).then(image => { artwork.set(id, image); resolve() }, reject)
+  const failures = new Set<string>()
+  await Promise.all(visibleSections(config).flatMap(section =>
+    config.panels[section.id].layers.map(async layer => {
+      if (layer.type !== 'image' || artwork.has(layer.assetId)) return
+      try {
+        const data = await getStoredImage(layer.assetId)
+        if (!data) throw new Error('Missing image')
+        artwork.set(layer.assetId, await loadImage(data))
+      } catch {
+        failures.add(section.label + ' (' + layer.name + ')')
       }
-      request.onerror = () => reject(request.error)
-    })))
-  } finally { db.close() }
+    }),
+  ))
+  if (failures.size) throw new Error('Missing artwork: ' + [...failures].join(', ') +
+    '. Remove the missing layer in the editor and upload the file again. For a saved cart item, add the corrected design to the cart.')
 }

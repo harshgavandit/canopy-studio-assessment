@@ -82,8 +82,19 @@ export default function App() {
   const key = quoteKey(config)
   const activeQuote = quote?.key === key ? quote.value : undefined
 
+  const imageIds = allowedSections.flatMap(({ id }) => config.panels[id].layers.flatMap(layer =>
+    layer.type === 'image' ? [layer.assetId] : [])).join(',')
   useEffect(() => {
-    void restoreImages(current.current).then(() => setAssetRevision(n => n + 1)).catch(() => setError('Saved artwork could not be restored.'))
+    let active = true
+    void restoreImages(current.current).then(() => {
+      if (active) setAssetRevision(n => n + 1)
+    }).catch(err => {
+      if (active) { setAssetRevision(n => n + 1); setError(err.message) }
+    })
+    return () => { active = false }
+  }, [imageIds])
+
+  useEffect(() => {
     if (embed) {
       notifyHost('ready', {})
       const root = document.getElementById('root')!
@@ -233,6 +244,7 @@ export default function App() {
     setBusy('cart')
     setError('')
     try {
+      await restoreImages(snapshot)
       const item = await request<CartItem>('cart', { configuration: snapshot, quoteId: activeQuote.id })
       if (previewImage) {
         savedPreviews.current.set(item.id, previewImage)
@@ -258,7 +270,7 @@ export default function App() {
     setBusy('pdf')
     setError('')
     try {
-      await restoreImages(configToExport).catch(() => {})
+      await restoreImages(configToExport)
       const capture = saved
         ? savedPreviews.current.get(saved.id) ?? await getStoredImage('proof-' + saved.id).catch(() => undefined)
         : visual.current?.capture()
@@ -423,9 +435,10 @@ export default function App() {
       </main>
 
       {notice && <div className="toast" role="status"><Icon name="check" size={17} />{notice}</div>}
-      {error && <div className="toast error-toast" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setError('')}><Icon name="close" size={16} /></button></div>}
+      {error && !cartOpen && <div className="toast error-toast" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setError('')}><Icon name="close" size={16} /></button></div>}
       <dialog ref={cartDialog} className="cart-dialog" onClose={() => setCartOpen(false)} onClick={event => { if (event.target === event.currentTarget) setCartOpen(false) }}>
         <div className="cart-sheet">
+          {error && <p role="alert" className="request-error">{error}</p>}
           <div className="controls-title"><div><p className="eyebrow">DEMO CART</p><h2>Your designs</h2></div><button className="icon-button" onClick={() => setCartOpen(false)} aria-label="Close cart"><Icon name="close" /></button></div>
           {!cart.length && <p className="muted">Your cart is empty.</p>}
           {cart.map(item => <article className="cart-item" key={item.id}>

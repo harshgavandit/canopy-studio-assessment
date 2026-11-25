@@ -8,7 +8,9 @@ export const sectionLabel = (id: Section['id']) => sectionFor(id).label
 export async function downloadProof(config: Configuration, quote: Quote, id: string, preview?: string) {
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
-  const proofId = id || ('draft-' + quote.id)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(config)))
+  const fingerprint = Array.from(new Uint8Array(digest).slice(0, 12), byte => byte.toString(16).padStart(2, '0')).join('')
+  const proofId = id || ('draft-' + fingerprint)
   const size = variantFor(config.variantId).label
   const frame = frames.find(item => item.id === config.frame)!.label
   const wall = walls.find(item => item.id === config.walls)!.label
