@@ -57,6 +57,7 @@ function remapFabric(geometry: THREE.BufferGeometry, variant: VariantId, walls: 
     groups[nearest].push(i)
   }
   const output = new Float32Array(uv.count * 2)
+  const roofBounds: THREE.Vector4[] = []
   for (const [index, vertices] of groups.entries()) {
     if (!vertices.length) throw new Error('A canopy panel is missing from the model.')
     const horizontal = right(sections[index].side)
@@ -67,12 +68,63 @@ function remapFabric(geometry: THREE.BufferGeometry, variant: VariantId, walls: 
     const maxX = Math.max(...x)
     const minY = Math.min(...y)
     const maxY = Math.max(...y)
+    if (index < 4) roofBounds.push(new THREE.Vector4(minX, maxX, minY, maxY))
     for (const i of vertices) {
       output.set(mapUV(index, (coordinate(i) - minX) / (maxX - minX),
         (maxY - position.getY(i)) / (maxY - minY), panelRatio(sections[index], walls)), i * 2)
     }
   }
   geometry.setAttribute('uv1', new THREE.BufferAttribute(output, 2))
+  return roofBounds
+}
+
+// The exported roof islands have uneven shared edges. Project the printed
+// roof seams continuously in model space while keeping the original fabric normals.
+function projectRoof(material: THREE.MeshStandardMaterial, roofBounds: THREE.Vector4[]) {
+  material.onBeforeCompile = shader => {
+    shader.uniforms.roofPrintBounds = { value: roofBounds }
+    shader.vertexShader = 'varying vec3 vRoofPrintPoint;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>', '#include <begin_vertex>\nvRoofPrintPoint = position;',
+    )
+    shader.fragmentShader = [
+      'varying vec3 vRoofPrintPoint;',
+      'uniform vec4 roofPrintBounds[4];',
+      shader.fragmentShader.replace('#include <map_fragment>', `
+        #ifdef USE_MAP
+          vec2 printUv = vMapUv;
+          if (vMapUv.y < 0.125) {
+            float panelX = vRoofPrintPoint.x;
+            float panelIndex = 0.0;
+            vec4 bounds = roofPrintBounds[0];
+            if (abs(vRoofPrintPoint.x) > abs(vRoofPrintPoint.z)) {
+              if (vRoofPrintPoint.x >= 0.0) {
+                panelIndex = 1.0;
+                bounds = roofPrintBounds[1];
+                panelX = -vRoofPrintPoint.z;
+              } else {
+                panelIndex = 3.0;
+                bounds = roofPrintBounds[3];
+                panelX = vRoofPrintPoint.z;
+              }
+            } else if (vRoofPrintPoint.z < 0.0) {
+              panelIndex = 2.0;
+              bounds = roofPrintBounds[2];
+              panelX = -vRoofPrintPoint.x;
+            }
+            vec2 panelUv = clamp(vec2(
+              (panelX - bounds.x) / (bounds.y - bounds.x),
+              (bounds.w - vRoofPrintPoint.y) / (bounds.w - bounds.z)
+            ), 0.0, 1.0);
+            printUv = vec2(
+              panelIndex * ${tile}.0 + ${margin}.0 + panelUv.x * ${tileWidth}.0,
+              ${margin}.0 + panelUv.y * ${tileWidth}.0 * ${panelRatio(sections[0], 'none')}
+            ) / ${atlasSize}.0;
+          }
+          diffuseColor *= texture2D(map, printUv);
+        #endif
+      `),
+    ].join('\n')
+  }
 }
 
 function disposeObject(object: THREE.Object3D) {
@@ -332,7 +384,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
           }
         }
         if (!Number.isFinite(eave)) eave = fabricBounds.min.y + span * .13
-        remapFabric(exterior.geometry, variant, latest.current.config.walls)
+        const roofBounds = remapFabric(exterior.geometry, variant, latest.current.config.walls)
         const fabric = exterior.material as THREE.MeshStandardMaterial
         fabric.map?.dispose()
         fabric.map = texture
@@ -341,6 +393,7 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
         fabric.metalness = 0
         fabric.roughness = .88
         fabric.normalScale.set(.45, .45)
+        projectRoof(fabric, roofBounds)
         fabric.needsUpdate = true
         shadow.scale.set(span * 1.87, span * 1.75, 1)
         controls.target.set(0, bounds.max.y * .46, 0)
@@ -392,7 +445,10 @@ export default function Preview({ config, revision, onApi, onSelect, onStatus }:
       if (!hit.uv) return
       const index = fabricRects[variant].findIndex(([l, t, r, b]) =>
         hit.uv!.x >= l - .0002 && hit.uv!.x <= r + .0002 && hit.uv!.y >= t - .0002 && hit.uv!.y <= b + .0002)
-      if (index >= 0) latest.current.onSelect(sections[index].id)
+      if (index < 0) return
+      const point = exterior.worldToLocal(hit.point.clone())
+      const side = Math.abs(point.x) > Math.abs(point.z) ? (point.x >= 0 ? 1 : 3) : (point.z >= 0 ? 0 : 2)
+      latest.current.onSelect(sections[index < 4 ? side : index].id)
     }
     renderer.domElement.addEventListener('pointerdown', down)
     renderer.domElement.addEventListener('pointerup', up)
